@@ -1,0 +1,35 @@
+name: index-pixeldrain
+# Lap chi muc metadata (ten, dung luong, sha256) cua thu vien Pixeldrain, ghi vao repo du lieu rieng.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  index:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Lap chi muc
+        env:
+          PD_KEY: ${{ secrets.PD_KEY }}
+        run: python -m crawler.pixeldrain_index --out data-repo/data
+      - name: Ghi vao repo du lieu rieng
+        working-directory: data-repo
+        run: |
+          git config user.name "monika-crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
+          git commit -m "data: pixeldrain index $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push

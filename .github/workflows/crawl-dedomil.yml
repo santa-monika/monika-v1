@@ -1,0 +1,60 @@
+name: crawl-dedomil
+# Lay metadata game (khong tai file) va ghi vao repo du lieu rieng. Chay tay.
+on:
+  workflow_dispatch:
+    inputs:
+      ids:
+        description: "Danh sach id game, cach nhau dau phay (co the de trong)"
+        required: false
+        default: ""
+      top_pages:
+        description: "Lay id tu bang top, vi du 1-3 (co the de trong)"
+        required: false
+        default: ""
+      delay:
+        description: "Giay giua hai yeu cau"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crawl-dedomil
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install Pillow
+      - run: python -m unittest discover -s tests
+      - name: Crawl metadata
+        env:
+          IDS: ${{ inputs.ids }}
+          TOP: ${{ inputs.top_pages }}
+          DELAY: ${{ inputs.delay }}
+        run: python -m crawler.dedomil --out data-repo/data --ids "$IDS" --top-pages "$TOP" --delay "$DELAY"
+      - name: Anh thu nho
+        env:
+          DELAY: ${{ inputs.delay }}
+        run: python -m crawler.images --out data-repo/data --delay "$DELAY"
+      - name: Ghi vao repo du lieu rieng
+        working-directory: data-repo
+        run: |
+          git config user.name "monika-crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
+          git commit -m "data: dedomil crawl $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
