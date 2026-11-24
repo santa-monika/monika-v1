@@ -434,7 +434,7 @@ def variants_of(p, post_res):
             idx = count[slot]
             count[slot] += 1
             out.append({"res": slot[0], "plat": plat, "kind": kind, "kb": max(1, round(j["bytes"] / 1024)), "pd": j["pd_id"], "pd_name": j.get("pd_name") or "",
-                        "alias": alias_key(p["id"], *slot, idx), "label": label, "created": f.get("created", "")})
+                        "alias": alias_key(p["id"], *slot, idx), "label": label, "name": re.sub(r"\.jar$", "", j["name"], flags=re.I)[:60], "created": f.get("created", "")})
     out.sort(key=lambda v: (PRIORITY.index(v["res"]) if v["res"] in PRIORITY else 99, v["res"], v["plat"], v["kind"], v["kb"]))
     return out[:40]
 
@@ -506,10 +506,10 @@ def build_post(p, used_imgs, now_ms=None):
     ext_rows = []
     if vs:
         rows = "\n".join(f'<tr><td>{htmllib.escape(v["res"])}</td><td>{"S60" if v["plat"] == "s60" else ("S40" if v["plat"] == "s40" else "Java")}'
-                         f'{" · Việt hóa" if v["kind"] == "vh" else ""}</td><td>{v["kb"]} KB</td>'
+                         f'{" · Việt hóa" if v["kind"] == "vh" else ""}</td><td>{htmllib.escape(v["name"])}</td><td>{v["kb"]} KB</td>'
                          f'<td><a href="{API}/v1/p/{v["alias"]}/{safe_name(title, v["res"], v["plat"], v["kind"])}">Tải JAR</a></td></tr>' for v in vs)
         body += ('<h3>Tải về theo độ phân giải</h3>\n<table border="1" cellpadding="4" cellspacing="0" width="100%">\n'
-                 f'<tr><th>Màn hình</th><th>Nền tảng</th><th>Dung lượng</th><th>Tải</th></tr>\n{rows}\n</table>\n')
+                 f'<tr><th>Màn hình</th><th>Nền tảng</th><th>Tệp</th><th>Dung lượng</th><th>Tải</th></tr>\n{rows}\n</table>\n')
         for f in p["files"]:
             if f.get("status") == "other":
                 ext_rows.append((f["fn"], f"https://www.mediafire.com/file/{f['qk']}"))
