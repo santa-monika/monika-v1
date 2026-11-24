@@ -4,7 +4,7 @@ Nguon: direct | xtgem (trang trung gian 'Download', di theo link do voi Referer,
 Khong lach gioi han: khong doi IP, khong gia nhieu trinh duyet; mot luong, nghi giua cac yeu cau."""
 import argparse, hashlib, html, io, json, os, re, sys, time, urllib.parse, urllib.request, urllib.error, zipfile
 from .common import UA, RateLimited
-from . import pd_upload
+from . import pd_upload, jarpromo
 
 PROMO = re.compile(rb"(wapvip|giaitri321|quangninhwap|wapm4u|xtgem|waptai|wap\.sh|uiwap|dongthap|campha1|tntinhyeu|hoangxuanpro|meovathay|mtaiaz)", re.I)
 HOTLINK = re.compile(rb'href="([^"]*xthotlink[^"]*)"')
@@ -91,6 +91,8 @@ def main(argv=None):
     if os.path.exists(a.state):
         for l in open(a.state, encoding="utf-8"):
             r = json.loads(l)
+            if r.get("ok") and r.get("promo") and not r.get("pixeldrain_id"):
+                continue  # ban cu bi giu lai vi quang cao: tai lai de lam sach
             done.add(r["url"])
             if r.get("sha256") and r.get("pixeldrain_id"):
                 known[r["sha256"]] = r["pixeldrain_id"]
@@ -105,6 +107,12 @@ def main(argv=None):
         rec = {"url": it["url"], "group": it["group"], "gid": gids[it["group"]], "src": it["src"]}
         try:
             raw = fetch(it, a.delay)
+            try:
+                raw, log = jarpromo.clean_jar(raw)
+            except Exception:
+                log = []
+            if log:
+                rec["cleaned"] = log
             info = inspect(raw)
             rec.update(info)
             if info["ok"]:
@@ -112,7 +120,7 @@ def main(argv=None):
                 rec["bytes"] = len(raw)
                 if rec["sha256"] in known:
                     rec.update(pixeldrain_id=known[rec["sha256"]], dup=True)
-                elif not a.no_upload and not info["promo"]:
+                elif not a.no_upload:
                     name = pd_name(it["src"], rec["gid"], it["file"])
                     path = f"/tmp/fj-{os.getpid()}.jar"
                     open(path, "wb").write(raw)
