@@ -1,0 +1,149 @@
+name: crawl-bisducko
+# bisduckopath.blogspot.com la web Java con cap nhat (ban Viet hoa, mod, port, ban va). Chay moi ngay:
+#   1) sync   : lay bai moi/bai moi sua tu feed Blogger (chu nhat: quet day du de phat hien bai bi go)
+#   2) resolve: mo link MediaFire cua bai doi + kiem lai sha256 cua cac bai cu (tep bi thay noi dung = ban va), ghi lich su vao state
+#   3) fetch  : tai tep moi/da doi, lam sach quang cao, dedupe sha256, up Pixeldrain (secret PD_KEY)
+#   4) build  : posts.json (nhap Blogger), bao cao thay doi, va bdk-aliases.json day len nhanh cong khai bdk-data cua repo nay
+#               (Worker doc ban do nay: link trong bai la khoa on dinh, ban va thay tep thi link khong doi)
+# Du lieu o repo rieng tu (secret DATA_REPO_TOKEN), thu muc data/bisducko. Lich su phien ban tung bai nam trong posts/<id>.json (history).
+on:
+  schedule:
+    - cron: "17 20 * * *"   # 03:17 gio Viet Nam
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "update (chi bai moi sua) | full (quet day du feed)"
+        required: false
+        default: "update"
+      nshards:
+        description: "So runner tai song song (1-6)"
+        required: false
+        default: "4"
+      recheck_days:
+        description: "Kiem lai sha256 tep cua bai chua kiem qua N ngay (0 = tat)"
+        required: false
+        default: "7"
+      data_branch:
+        description: "Nhanh cua repo du lieu"
+        required: false
+        default: "claude/project-thread-mzn3u4"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: crawl-bisducko
+  cancel-in-progress: false
+
+env:
+  DATA_BRANCH: ${{ inputs.data_branch || 'claude/project-thread-mzn3u4' }}
+  NSHARDS: ${{ inputs.nshards || '4' }}
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    outputs:
+      shards: ${{ steps.m.outputs.shards }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          ref: ${{ env.DATA_BRANCH }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - id: m
+        run: |
+          n=$(( NSHARDS > 6 ? 6 : NSHARDS )); [ "$n" -lt 1 ] && n=1
+          echo "shards=$(python3 -c "import json;print(json.dumps(list(range($n))))")" >> "$GITHUB_OUTPUT"
+      - name: Sync feed + resolve MediaFire
+        env:
+          MODE: ${{ inputs.mode || 'update' }}
+          RECHECK: ${{ inputs.recheck_days || '7' }}
+        run: |
+          D=data-repo/data/bisducko; mkdir -p $D
+          SINCE=""
+          if [ "$MODE" != "full" ] && [ "$(date -u +%u)" != "7" ] && [ -s $D/last_sync.txt ]; then SINCE="--since $(cat $D/last_sync.txt)"; fi
+          START=$(date -u -d '1 day ago' +%Y-%m-%dT%H:%M:%SZ)
+          python -m crawler.bisducko sync --data $D $SINCE
+          # chia 3 luong resolve song song (moi luong nghi >= 0.8 giay giua hai yeu cau)
+          for i in 0 1 2; do python -m crawler.bisducko resolve --data $D --delay 0.8 --shard $i --nshards 3 --recheck "$RECHECK" --limit 250 & done; wait
+          echo "$START" > $D/last_sync.txt
+          cd data-repo && git config user.name "monika-crawler" && git config user.email "noreply@users.noreply.github.com"
+          git add data/bisducko && { git diff --cached --quiet || git commit -q -m "data: bisducko sync $(date -u +%FT%H:%MZ)"; }
+          for t in 1 2 3 4; do git pull -q --rebase origin "$DATA_BRANCH" && git push -q origin "HEAD:$DATA_BRANCH" && break || sleep $((RANDOM % 20 + 5)); done
+
+  fetch:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.shards) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          ref: ${{ env.DATA_BRANCH }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Kiem tra PD_KEY
+        env:
+          PD_KEY: ${{ secrets.PD_KEY }}
+        run: |
+          if [ -z "$PD_KEY" ]; then echo "PD_KEY chua duoc dat trong secrets cua repo"; exit 1; fi
+      - name: Tai, lam sach, up Pixeldrain (moi 30 phut ghi state)
+        env:
+          PD_KEY: ${{ secrets.PD_KEY }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          cd data-repo && git config user.name "monika-crawler" && git config user.email "noreply@users.noreply.github.com" && cd ..
+          n=$(( NSHARDS > 6 ? 6 : NSHARDS )); [ "$n" -lt 1 ] && n=1
+          for i in $(seq 1 10); do
+            python -m crawler.bisducko fetch --data data-repo/data/bisducko --index data-repo/data/pixeldrain/index.json \
+              --delay 2 --budget-s 1800 --shard "$SHARD" --nshards "$n" 2>&1 | tee -a run.log
+            (cd data-repo && git add data/bisducko && { git diff --cached --quiet || git commit -q -m "data: bisducko fetch shard $SHARD $(date -u +%H:%MZ)"; } \
+              && for t in 1 2 3 4; do git pull -q --rebase origin "$DATA_BRANCH" && git push -q origin "HEAD:$DATA_BRANCH" && break || sleep $((RANDOM % 20 + 5)); done)
+            grep -q "^429" run.log && break
+            grep -q "fetch xong: 0 tep" run.log && break
+          done
+
+  publish:
+    needs: fetch
+    if: ${{ !cancelled() && needs.prepare.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          ref: ${{ env.DATA_BRANCH }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build posts.json, bao cao, ban do khoa tai
+        run: |
+          python -m crawler.bisducko build --data data-repo/data/bisducko --out out
+          python -m crawler.bisducko report --data data-repo/data/bisducko --out out --days 2 | tee -a "$GITHUB_STEP_SUMMARY"
+          mkdir -p data-repo/data/bisducko/out && cp out/posts.json out/skipped.json out/REPORT.md data-repo/data/bisducko/out/
+          cd data-repo && git config user.name "monika-crawler" && git config user.email "noreply@users.noreply.github.com"
+          git add data/bisducko && { git diff --cached --quiet || git commit -q -m "data: bisducko build $(date -u +%FT%H:%MZ)"; }
+          for t in 1 2 3 4; do git pull -q --rebase origin "$DATA_BRANCH" && git push -q origin "HEAD:$DATA_BRANCH" && break || sleep $((RANDOM % 20 + 5)); done
+      - name: Day ban do khoa tai len nhanh cong khai bdk-data
+        run: |
+          cp out/bdk-aliases.json /tmp/bdk-aliases.json
+          git config user.name "monika-crawler" && git config user.email "noreply@users.noreply.github.com"
+          if git fetch -q origin bdk-data; then git checkout -q -B bdk-data FETCH_HEAD; else git checkout -q --orphan bdk-data && git rm -rfq .; fi
+          cp /tmp/bdk-aliases.json bdk-aliases.json
+          git add bdk-aliases.json && { git diff --cached --quiet && echo "ban do khong doi" || { git commit -q -m "aliases $(date -u +%FT%H:%MZ)" && git push -q origin bdk-data; }; }
