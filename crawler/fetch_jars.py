@@ -6,6 +6,10 @@ import argparse, hashlib, html, io, json, os, re, sys, time, urllib.parse, urlli
 from .common import UA, RateLimited
 from . import pd_upload, jarpromo
 
+# loi tam thoi (site dang tu choi ket noi / qua tai): khong ghi vao state de lan chay sau thu lai, va nghi lau hon truoc khi thu tiep
+TRANSIENT = re.compile(r"(Connection refused|timed out|handshake|HTTP 5\d\d|ConnectionReset|RemoteDisconnected|Connection reset|BadStatusLine|IncompleteRead)", re.I)
+BACKOFF = (30, 120)
+
 PROMO = re.compile(rb"(wapvip|giaitri321|quangninhwap|wapm4u|xtgem|waptai|wap\.sh|uiwap|dongthap|campha1|tntinhyeu|hoangxuanpro|meovathay|mtaiaz)", re.I)
 HOTLINK = re.compile(rb'href="([^"]*xthotlink[^"]*)"')
 
@@ -102,20 +106,33 @@ def main(argv=None):
             r = json.loads(l)
             if r.get("ok") and r.get("promo") and not r.get("pixeldrain_id"):
                 continue  # ban cu bi giu lai vi quang cao: tai lai de lam sach
+            if not r.get("ok") and TRANSIENT.search(r.get("error", "")):
+                continue  # loi tam thoi: thu lai
             done.add(r["url"])
             if r.get("sha256") and r.get("pixeldrain_id"):
                 known[r["sha256"]] = r["pixeldrain_id"]
     t0, n, nbad = time.time(), 0, 0
+    skipped = set()  # loi tam thoi trong lan chay nay: de lan sau
     out = open(a.state, "a", encoding="utf-8")
     for it in inv:
-        if it["url"] in done or gids[it["group"]] % a.nshards != a.shard:
+        if it["url"] in done or it["url"] in skipped or gids[it["group"]] % a.nshards != a.shard:
             continue
         if (a.limit and n >= a.limit) or (a.budget_s and time.time() - t0 > a.budget_s):
             break
         n += 1
         rec = {"url": it["url"], "group": it["group"], "gid": gids[it["group"]], "src": it["src"]}
         try:
-            raw = fetch(it, a.delay)
+            for wait in BACKOFF + (None,):
+                try:
+                    raw = fetch(it, a.delay)
+                    break
+                except (urllib.error.URLError, OSError, ConnectionError) as e:
+                    if isinstance(e, urllib.error.HTTPError) and e.code < 500:
+                        raise
+                    if wait is None:
+                        raise
+                    print(f"loi tam thoi ({type(e).__name__}), nghi {wait} giay roi thu lai", flush=True)
+                    time.sleep(wait)
             try:
                 raw, log = jarpromo.clean_jar(raw)
             except Exception:
@@ -146,6 +163,10 @@ def main(argv=None):
             rec.update(ok=False, error=f"{type(e).__name__}: {str(e)[:80]}")
         if not rec.get("ok"):
             nbad += 1
+            if TRANSIENT.search(rec.get("error", "")):
+                skipped.add(it["url"])
+                time.sleep(a.delay)
+                continue  # khong ghi state: se thu lai o lan chay sau
         out.write(json.dumps(rec, ensure_ascii=False) + "\n")
         out.flush()
         if n % 10 == 0:
