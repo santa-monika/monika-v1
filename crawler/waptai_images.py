@@ -29,6 +29,7 @@ def ext_of(raw):
 
 
 def url_of(entry):
+    entry = entry.get("clean") or entry  # ban da xoa chu WapTai.COM (waptai_clean_images) uu tien
     return f"{API}/v1/pi/{entry['pixeldrain_id']}/{entry['name']}"
 
 
