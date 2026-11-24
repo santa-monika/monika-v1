@@ -28,8 +28,12 @@ def ext_of(raw):
     return None
 
 
+USE_CLEAN = False  # sep chon giu anh goc (2026-11-24); bat True de dung ban da xoa chu WapTai.COM (truong 'clean')
+
+
 def url_of(entry):
-    entry = entry.get("clean") or entry  # ban da xoa chu WapTai.COM (waptai_clean_images) uu tien
+    if USE_CLEAN and entry.get("clean"):
+        entry = entry["clean"]
     return f"{API}/v1/pi/{entry['pixeldrain_id']}/{entry['name']}"
 
 
