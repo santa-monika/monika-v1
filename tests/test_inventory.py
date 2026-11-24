@@ -36,3 +36,19 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TPromo(unittest.TestCase):
+    def test_clean(self):
+        from crawler import jarpromo
+        mf = ("MIDlet-1: Game, /i.png, G\r\nMIDlet-2: WapM4U.com, /w.png, W\r\nMIDlet-Vendor: wapm4u.xtgem.com\r\n"
+              "MIDlet-Info-URL: http://wapm4u.xtgem.com\r\nMIDlet-Name: Game\r\n").replace("\\\\r\\\\n", "\r\n")
+        raw = make_jar(mf, {"G.class": b"x", "i.png": b"p"})
+        new, log = jarpromo.clean_jar(raw)
+        self.assertEqual(len(log), 3)
+        info = fetch_jars.inspect(new)
+        self.assertTrue(info["ok"] and info["promo"] == [] and info["midlets"] == 1)
+        z = zipfile.ZipFile(io.BytesIO(new))
+        self.assertEqual(z.read("G.class"), b"x")
+        same, log2 = jarpromo.clean_jar(make_jar("MIDlet-1: Game, , G\r\n"))
+        self.assertEqual(log2, [])
