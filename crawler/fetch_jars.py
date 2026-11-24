@@ -81,15 +81,24 @@ def main(argv=None):
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--budget-s", type=int, default=0, help="dung sau chung nay giay")
     ap.add_argument("--no-upload", action="store_true")
+    ap.add_argument("--shard", type=int, default=0)
+    ap.add_argument("--nshards", type=int, default=1, help="chia theo nhom game (gid % nshards == shard) de chay song song tren nhieu runner")
+    ap.add_argument("--seen", default="", help="glob cac state khac chi doc (de bo qua tep da xong)")
     a = ap.parse_args(argv)
     inv = [json.loads(l) for l in open(a.inv, encoding="utf-8")]
     gids = {}
     for it in inv:
         gids.setdefault(it["group"], len(gids) + 1)
     done = set()
-    known = pd_upload.load_known(a.index)
-    if os.path.exists(a.state):
-        for l in open(a.state, encoding="utf-8"):
+    import glob as _glob
+    seen_files = [f for f in _glob.glob(a.seen)] if a.seen else []
+    known = {}
+    if a.index and os.path.exists(a.index):
+        # chi dung lai tep cu neu ten khop quy tac cua Worker /v1/p (ten khac se khong phat duoc), con lai up lai voi ten dung
+        known = {f["sha256"]: f["id"] for f in json.load(open(a.index, encoding="utf-8"))
+                 if f.get("sha256") and re.match(r"^(waptai|qnw|gt321|wvip)-\d+-.+\.jar$", f.get("name", ""), re.I)}
+    for sf in ([a.state] if os.path.exists(a.state) else []) + [f for f in seen_files if f != a.state]:
+        for l in open(sf, encoding="utf-8"):
             r = json.loads(l)
             if r.get("ok") and r.get("promo") and not r.get("pixeldrain_id"):
                 continue  # ban cu bi giu lai vi quang cao: tai lai de lam sach
@@ -99,7 +108,7 @@ def main(argv=None):
     t0, n, nbad = time.time(), 0, 0
     out = open(a.state, "a", encoding="utf-8")
     for it in inv:
-        if it["url"] in done:
+        if it["url"] in done or gids[it["group"]] % a.nshards != a.shard:
             continue
         if (a.limit and n >= a.limit) or (a.budget_s and time.time() - t0 > a.budget_s):
             break
@@ -139,8 +148,8 @@ def main(argv=None):
             nbad += 1
         out.write(json.dumps(rec, ensure_ascii=False) + "\n")
         out.flush()
-        if n % 25 == 0:
-            print(f"{n} tep, {nbad} loi", flush=True)
+        if n % 10 == 0:
+            print(f"{n} tep, {nbad} loi, {int(time.time() - t0)} giay", flush=True)
         time.sleep(a.delay)
     print(f"xong lan chay: {n} tep, {nbad} loi")
     return 0

@@ -1,6 +1,7 @@
 name: fetch-archive
-# Tai JAR cua nguon da dong tu archive.org theo danh muc (data/inventory/<src>.jsonl trong repo du lieu), kiem tra, dedupe sha256,
-# dua len Pixeldrain (secret PD_KEY), ghi ket qua vao data/inventory/<src>-state.jsonl. Chay lai tiep tuc tu cho dang do. Chay tay.
+# Tai JAR cua nguon da dong tu archive.org theo danh muc (data/inventory/<src>.jsonl trong repo du lieu), kiem tra, lam sach quang cao,
+# dedupe sha256, dua len Pixeldrain (secret PD_KEY), ghi ket qua vao data/inventory/<src>-state-<shard>.jsonl moi 30 phut.
+# Chia theo nhom game cho N runner chay song song (moi runner van nghi >= delay giay giua hai yeu cau). Dung ngay khi gap 429. Chay tay.
 on:
   workflow_dispatch:
     inputs:
@@ -8,14 +9,18 @@ on:
         description: "gt321 hoac wvip"
         required: true
         default: "gt321"
-      delay:
-        description: "Giay giua hai yeu cau (nen >= 3 voi archive.org)"
+      nshards:
+        description: "So runner song song (1-6)"
         required: false
         default: "4"
-      budget_s:
-        description: "Dung sau chung nay giay (toi da ~19000)"
+      delay:
+        description: "Giay giua hai yeu cau cua moi runner (nen >= 3 voi archive.org)"
         required: false
-        default: "18000"
+        default: "4"
+      loops:
+        description: "So vong 30 phut (toi da 10)"
+        required: false
+        default: "10"
       data_branch:
         description: "Nhanh cua repo du lieu"
         required: false
@@ -24,14 +29,30 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: fetch-archive-${{ inputs.src }}
-  cancel-in-progress: false
-
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.m.outputs.shards }}
+    steps:
+      - id: m
+        env:
+          N: ${{ inputs.nshards }}
+        run: |
+          n=$(( N > 6 ? 6 : N )); [ "$n" -lt 1 ] && n=1
+          echo "shards=$(python3 -c "import json;print(json.dumps(list(range($n))))")" >> "$GITHUB_OUTPUT"
+
   fetch:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 345
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.shards) }}
+    concurrency:
+      group: fetch-archive-${{ inputs.src }}-${{ matrix.shard }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/checkout@v4
@@ -49,25 +70,25 @@ jobs:
         run: |
           if [ -z "$PD_KEY" ]; then echo "PD_KEY chua duoc dat trong secrets cua repo"; exit 1; fi
           echo "PD_KEY da co (${#PD_KEY} ky tu)"
-      - name: Tai, kiem tra, up Pixeldrain
+      - name: Tai, kiem tra, up Pixeldrain (moi 30 phut ghi state)
         env:
           PD_KEY: ${{ secrets.PD_KEY }}
           SRC: ${{ inputs.src }}
+          SHARD: ${{ matrix.shard }}
+          NSHARDS: ${{ inputs.nshards }}
           DELAY: ${{ inputs.delay }}
-          BUDGET: ${{ inputs.budget_s }}
+          LOOPS: ${{ inputs.loops }}
+          BRANCH: ${{ inputs.data_branch }}
         run: |
-          python -m crawler.fetch_jars --inv "data-repo/data/inventory/$SRC.jsonl" \
-            --state "data-repo/data/inventory/$SRC-state.jsonl" --index data-repo/data/pixeldrain/index.json \
-            --delay "$DELAY" --budget-s "$BUDGET"
-      - name: Ghi ket qua vao repo du lieu
-        if: always()
-        working-directory: data-repo
-        env:
-          SRC: ${{ inputs.src }}
-        run: |
-          git config user.name "monika-crawler"
-          git config user.email "noreply@users.noreply.github.com"
-          git add data/inventory
-          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
-          git commit -m "data: $SRC fetch state $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push origin HEAD:${{ inputs.data_branch }}
+          cd data-repo && git config user.name "monika-crawler" && git config user.email "noreply@users.noreply.github.com" && cd ..
+          n=$(( NSHARDS > 6 ? 6 : NSHARDS )); [ "$n" -lt 1 ] && n=1
+          l=$(( LOOPS > 10 ? 10 : LOOPS ))
+          for i in $(seq 1 "$l"); do
+            python -m crawler.fetch_jars --inv "data-repo/data/inventory/$SRC.jsonl" \
+              --state "data-repo/data/inventory/$SRC-state-$SHARD.jsonl" --seen "data-repo/data/inventory/$SRC-state*.jsonl" \
+              --index data-repo/data/pixeldrain/index.json --delay "$DELAY" --budget-s 1800 --shard "$SHARD" --nshards "$n" 2>&1 | tee -a run.log
+            grep -q "^429" run.log && break
+            (cd data-repo && git add data/inventory && { git diff --cached --quiet || git commit -q -m "data: $SRC state shard $SHARD $(date -u +%H:%MZ)"; } \
+              && for t in 1 2 3 4; do git pull -q --rebase origin "$BRANCH" && git push -q origin "HEAD:$BRANCH" && break || sleep $((RANDOM % 20 + 5)); done)
+            grep -q "xong lan chay: 0 tep" run.log && break
+          done
