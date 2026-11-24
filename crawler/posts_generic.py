@@ -39,12 +39,25 @@ APP_RULES = [
 ]
 
 
-def cat_of(title, kind):
+def cat_of(title, kind, default=None):
     t = strip_accents(title).lower()
     for name, pat in (APP_RULES if kind == "app" else GAME_RULES):
         if re.search(pat, t):
             return name
-    return "Khác" if kind == "app" else "Hành động"
+    return default or ("Khác" if kind == "app" else "Hành động")
+
+
+def valid_cats(kind):
+    return {n for n, _ in (APP_RULES if kind == "app" else GAME_RULES)} | {"Khác"}
+
+
+def load_overrides(files):
+    """Ket qua lam sach ten/the loai (moi dong: src, group, title, cat, skip) -> {(src, group): dong}."""
+    ov = {}
+    for f in files:
+        for w in json.load(open(f, encoding="utf-8")):
+            ov[(w["src"], w["group"])] = w
+    return ov
 
 
 def res_key(r):
@@ -56,7 +69,8 @@ def best_title(rows):
     return max(c, key=lambda t: (c[t], len(t)))
 
 
-def build_games(inv, state, index_by_id, src, start, limit=0):
+def build_games(inv, state, index_by_id, src, start, limit=0, overrides=None):
+    overrides = overrides or {}
     stmap = {r["url"]: r for r in state if r.get("ok") and r.get("pixeldrain_id")}
     groups = collections.OrderedDict()
     for it in inv:
@@ -66,11 +80,20 @@ def build_games(inv, state, index_by_id, src, start, limit=0):
     posts = []
     n = 0
     for g, rows in groups.items():
+        if all(st.get("dup") for _, st in rows):
+            continue  # moi tep deu trung tep da co tren kho (vd. da len tu waptai): game nay da co bai, khong dang lai
         items = [r[0] for r in rows]
+        ov = overrides.get((src, g), {})
+        if ov.get("skip"):
+            continue  # cờ bạc / 18+ / game online được phát hiện ở bước làm sạch tên
         title = best_title(items)
         kind = items[0]["kind"]
         vh = any(i["vh"] for i in items)
-        cat = cat_of(title, kind)
+        t_vi = (ov.get("title") or "").strip()
+        if t_vi and 2 <= len(t_vi) <= 80:
+            title = t_vi
+        oc = ov.get("cat")
+        cat = oc if oc in valid_cats(kind) and oc != "Khác" else cat_of(title, kind, default="Khác")
         seen, variants = set(), []
         for it, st in rows:
             name = st.get("pd_name") or index_by_id.get(st["pixeldrain_id"], {}).get("name") or os.path.basename(it["file"])
@@ -143,12 +166,13 @@ def main(argv=None):
     ap.add_argument("--text-items", default="")
     ap.add_argument("--text-out", nargs="*", default=[])
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--overrides", nargs="*", default=[], help="file json lam sach ten/the loai (haiku2/out-N.json)")
     a = ap.parse_args(argv)
     inv = [json.loads(l) for l in open(a.inv, encoding="utf-8")]
     state = [json.loads(l) for l in open(a.state, encoding="utf-8")]
     index = {f["id"]: f for f in json.load(open(a.index, encoding="utf-8"))}
     start = datetime.now(timezone.utc).replace(microsecond=0)
-    posts = build_games(inv, state, index, a.src, start, a.limit)
+    posts = build_games(inv, state, index, a.src, start, a.limit, load_overrides(a.overrides))
     if a.text_items:
         written = {}
         for f in a.text_out:
