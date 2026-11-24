@@ -48,6 +48,20 @@ def table_html(items):
             + "\n".join(rows) + "\n</table>")
 
 
+import re
+INFO_RES = re.compile(r"(\d{3})\s*[xX×]\s*(\d{3})")
+LABEL_RES = ("240x320", "320x240")  # co nhan Blogger rieng de bam tag ra danh sach
+
+
+def info_res(r):
+    """Do phan giai ghi o muc 'Ho tro man hinh' cua trang goc (dau × hoac x), da chuan hoa."""
+    out = []
+    for k, v in (r.get("info") or {}).items():
+        if "màn hình" in k.lower() or "man hinh" in k.lower():
+            out += [f"{a}x{b}" for a, b in INFO_RES.findall(v or "")]
+    return sorted(set(out), key=res_key)
+
+
 def img_url(u, idx):
     """Anh da chuyen ve kho Pixeldrain thi dung link Worker; chua thi tam hotlink nguon (ghi nhan de bao)."""
     e = idx.get(u)
@@ -67,7 +81,11 @@ def stamp(start, n):
 
 def build_files(r, d, items, imgs_raw, idx, labels, extra_meta, cat, plat="j2me"):
     imgs = [img_url(u, idx) for u in imgs_raw]
-    res = sorted({x["resolution"] for x, _ in items if x["resolution"]}, key=res_key)[:6]
+    ir = info_res(r)
+    # ban chua ro do phan giai: neu trang goc chi ghi dung mot co thi gan co do
+    items = [(dict(dl, resolution=dl["resolution"] or (ir[0] if len(ir) == 1 else None)), x) for dl, x in items]
+    res = sorted({x["resolution"] for x, _ in items if x["resolution"]} | set(ir), key=res_key)
+    labels = list(labels) + [t for t in LABEL_RES if t in res]
     meta = {"type": extra_meta["type"], "size": str(min(kb_of(x) for _, x in items)), "cat": cat, "tags": extra_meta.get("tags", "goc"),
             "plat": plat, "res": ", ".join(res), "desc": d["desc"]}
     if imgs:

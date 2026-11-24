@@ -42,6 +42,19 @@ class T(unittest.TestCase):
             self.assertEqual(by["Mẹo"]["meta"]["cat"], "Thủ thuật & mẹo")
             self.assertEqual(len(skipped), 2)
 
+    def test_do_phan_giai_va_nhan(self):
+        r = {"info": {"Hỗ Trợ Màn Hình": "176×220 240×320 320×240", "Tên Game": "x 999x999"}}
+        self.assertEqual(wp.info_res(r), ["240x320", "320x240", "176x220"])
+        self.assertEqual(wp.info_res({"info": {"Hỗ Trợ Màn Hình": "Đa số các màn hình"}}), [])
+        d = {"title": "G", "desc": "d", "body": "b"}
+        rr = {"page_url": "u", "info": {"Hỗ Trợ Màn Hình": "240×320"}}
+        it = [({"resolution": None, "models": ""}, {"bytes_clean": 2048, "file": "1/a.jar", "pixeldrain_id": "PD123456"})]
+        post = wp.build_files(rr, d, it, [], {}, ["Game"], {"type": "game"}, "Hành động")
+        self.assertIn("240x320", post["labels"])
+        self.assertNotIn("320x240", post["labels"])
+        self.assertEqual(post["meta"]["res"], "240x320")
+        self.assertTrue(post["meta"]["v1"].startswith("240x320|"))
+
     def test_ten_anh_theo_noi_dung(self):
         self.assertEqual(wi.ext_of(b"\xff\xd8\xff\xe0abc"), "jpg")
         self.assertIsNone(wi.ext_of(b"<html>"))
