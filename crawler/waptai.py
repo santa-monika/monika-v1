@@ -165,7 +165,23 @@ def fetch_page(fetcher, page, per_page=100):
     return json.loads(fetcher.get(url))
 
 
+def load_overrides(outdir):
+    """data/waptai/overrides.json: {"exclude": {id: ly_do}, "include": {id: ly_do}} do sep chot tay."""
+    path = os.path.join(outdir, "waptai", "overrides.json")
+    return json.load(open(path, encoding="utf-8")) if os.path.exists(path) else {"exclude": {}, "include": {}}
+
+
+def apply_overrides(r, ov):
+    sid = str(r["source_id"])
+    if sid in ov.get("exclude", {}):
+        r["filter"] = {"status": "loai", "reasons": [ov["exclude"][sid]]}
+    elif sid in ov.get("include", {}) and r["filter"]["status"] == "duyet":
+        r["filter"] = {"status": "ok", "reasons": [ov["include"][sid]]}
+    return r
+
+
 def crawl(outdir, fetcher, max_pages=None, force=False):
+    ov = load_overrides(outdir)
     pdir = os.path.join(outdir, "waptai", "posts")
     os.makedirs(pdir, exist_ok=True)
     new = upd = same = 0
@@ -183,7 +199,7 @@ def crawl(outdir, fetcher, max_pages=None, force=False):
             if old and old.get("modified") == p["modified"] and not force:
                 same += 1
                 continue
-            r = parse_post(p)
+            r = apply_overrides(parse_post(p), ov)
             if old:
                 for k in ("local", "thumbs"):  # giu ket qua cac buoc sau (jar da lam sach, anh thu nho)
                     if k in old:
