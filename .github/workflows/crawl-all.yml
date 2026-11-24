@@ -1,0 +1,65 @@
+name: crawl-all
+# Quet toan bo dedomil (id 1..8400) thanh 5 dai noi tiep, moi dai: metadata + 1 anh thu nho/game. Chay tay, mot lenh la chay het.
+# Lay metadata va anh nho (khong tai file JAR/ZIP) roi ghi vao repo du lieu rieng. Chay lai duoc: bo qua game/id da co.
+on:
+  workflow_dispatch:
+    inputs:
+      delay:
+        description: "Giay giua hai yeu cau toi dedomil"
+        required: false
+        default: "1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crawl-dedomil
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 340
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        range: ["1-1700", "1701-3400", "3401-5100", "5101-6800", "6801-8400"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install Pillow
+      - run: python -m unittest discover -s tests
+      - name: Crawl metadata dai ${{ matrix.range }}
+        env:
+          DELAY: ${{ inputs.delay }}
+          RANGE: ${{ matrix.range }}
+        run: |
+          lo="${RANGE%-*}"; hi="${RANGE#*-}"
+          python -m crawler.dedomil --out data-repo/data --id-from "$lo" --id-to "$hi" --delay "$DELAY"
+      - name: Anh thu nho dai ${{ matrix.range }}
+        env:
+          DELAY: ${{ inputs.delay }}
+          RANGE: ${{ matrix.range }}
+        run: |
+          lo="${RANGE%-*}"; hi="${RANGE#*-}"
+          python -m crawler.images --out data-repo/data --delay "$DELAY" --max-per-game 1 --id-from "$lo" --id-to "$hi"
+      - name: Ghi vao repo du lieu rieng
+        working-directory: data-repo
+        env:
+          RANGE: ${{ matrix.range }}
+        run: |
+          git config user.name "monika-crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
+          git commit -q -m "data: dedomil crawl dai $RANGE $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4; do git pull -q --rebase && git push -q && exit 0; sleep $((i*5)); done
+          exit 1

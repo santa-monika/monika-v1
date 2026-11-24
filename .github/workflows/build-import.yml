@@ -1,0 +1,72 @@
+name: build-import
+# Dung file nhap Blogger (moi file toi da 300 bai) tu du lieu da quet, ghi vao repo du lieu rieng (export/),
+# va dong goi anh thu nho thanh release de monika-java dua vao R2.
+on:
+  workflow_dispatch:
+    inputs:
+      per_file:
+        description: "So bai toi da moi file XML"
+        required: false
+        default: "300"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m unittest discover -s tests
+      - name: Dung posts.json va XML
+        env:
+          PER: ${{ inputs.per_file }}
+        run: |
+          rm -rf data-repo/export
+          python -m crawler.blogger_json --data data-repo/data --out data-repo/export/posts --per-file 100000 --skip-handwritten
+          node tools/blogger-import.mjs --in data-repo/export/posts/posts-001.json --out data-repo/export/xml --prefix monika-dedomil --max-posts "$PER" --author Monika --author-uri https://m.justmonika.top
+          ls -l data-repo/export/xml | head -50
+      - name: Goi anh thu nho (pic/<id>_1.jpg)
+        run: |
+          python - <<'PY'
+          import json, os, re, zipfile
+          posts = json.load(open("data-repo/export/posts/posts-001.json", encoding="utf-8"))
+          ids = [m.group(1) for p in posts for m in [re.search(r"/v1/pic/(\d+_1\.jpg)", p["meta"].get("img", ""))] if m]
+          n = 0
+          with zipfile.ZipFile("pics.zip", "w", zipfile.ZIP_STORED) as z:
+              for name in ids:
+                  f = os.path.join("data-repo/data/dedomil/img", name)
+                  if os.path.exists(f):
+                      z.write(f, "pic/" + name); n += 1
+          print(f"{n} anh / {len(posts)} bai")
+          PY
+          ls -l pics.zip
+      - name: Release anh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="pics-$(date -u +%Y%m%d-%H%M)"
+          gh release create "$tag" pics.zip --title "$tag" --notes "Anh thu nho game cho R2 (pic/<id>_1.jpg)"
+          echo "TAG=$tag"
+      - name: Ghi vao repo du lieu rieng
+        working-directory: data-repo
+        run: |
+          git config user.name "monika-crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add export
+          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
+          git commit -q -m "export: file nhap Blogger $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3 4; do git pull -q --rebase && git push -q && exit 0; sleep $((i*5)); done
+          exit 1

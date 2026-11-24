@@ -1,6 +1,6 @@
 """Crawler metadata dedomil.net (chi qua HTTP cong 80; HTTPS bi reset tu moi truong cloud).
 Khong tai file JAR. Moi game -> 1 JSON. Chay lai duoc: bo qua game da co."""
-import argparse, html, json, os, re, sys
+import argparse, html, json, os, re, sys, urllib.error
 from .common import Fetcher
 from .filters import classify
 from .normalize import norm_title, resolution
@@ -75,15 +75,27 @@ def parse_game(page_html, gid):
 
 
 def crawl_games(ids, outdir, fetcher):
+    """Moi id -> 1 JSON. Id khong co (404 hoac trang rong) ghi vao missing.json de lan sau khong hoi lai."""
     os.makedirs(outdir, exist_ok=True)
+    mpath = os.path.join(os.path.dirname(outdir.rstrip("/")), "missing.json")
+    missing = set(json.load(open(mpath))) if os.path.exists(mpath) else set()
     done = fail = skipped = 0
     for gid in ids:
         path = os.path.join(outdir, f"{gid}.json")
-        if os.path.exists(path):
+        if os.path.exists(path) or gid in missing:
             skipped += 1
             continue
         try:
             g = parse_game(fetcher.get(f"{BASE}/games/{gid}"), gid)
+            if not g["title"]:
+                raise urllib.error.HTTPError(f"{BASE}/games/{gid}", 404, "trang rong", None, None)
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                missing.add(gid)
+                continue
+            fail += 1
+            print(f"loi game {gid}: HTTP {e.code}", file=sys.stderr)
+            continue
         except Exception as e:
             fail += 1
             print(f"loi game {gid}: {type(e).__name__}", file=sys.stderr)
@@ -91,6 +103,7 @@ def crawl_games(ids, outdir, fetcher):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(g, f, ensure_ascii=False, indent=1)
         done += 1
+    json.dump(sorted(missing), open(mpath, "w"))
     return done, skipped, fail
 
 
@@ -109,6 +122,8 @@ def main(argv=None):
     ap.add_argument("--out", required=True, help="thu muc dau ra (repo du lieu rieng)")
     ap.add_argument("--ids", default="", help="danh sach id cach nhau dau phay")
     ap.add_argument("--top-pages", default="", help="vd 1-2: lay id tu bang xep hang top")
+    ap.add_argument("--id-from", type=int, default=0, help="quet lien tuc tu id nay")
+    ap.add_argument("--id-to", type=int, default=0, help="den id nay (gom ca)")
     ap.add_argument("--delay", type=float, default=2.0)
     a = ap.parse_args(argv)
     f = Fetcher(delay=a.delay)
@@ -116,6 +131,8 @@ def main(argv=None):
     if a.top_pages:
         lo, _, hi = a.top_pages.partition("-")
         ids += list_ids(f, "top", range(int(lo), int(hi or lo) + 1))
+    if a.id_from and a.id_to:
+        ids += list(range(a.id_from, a.id_to + 1))
     ids = list(dict.fromkeys(ids))
     done, skipped, fail = crawl_games(ids, os.path.join(a.out, "dedomil", "games"), f)
     print(f"xong: {done} moi, {skipped} da co, {fail} loi, {f.requests} yeu cau")

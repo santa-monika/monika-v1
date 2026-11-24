@@ -48,41 +48,75 @@ def v_lines(g):
     return out[:40]
 
 
-def build(data, start):
+def kb_range(g):
+    jars = [x["size_kb"] for x in g["variants"] if x["kind"] == "jar" and x["size_kb"]]
+    return (min(jars), max(jars)) if jars else (0, 0)
+
+
+def entry(g, cat, desc, body_intro, res, n, start, pic):
+    jars_min, _ = kb_range(g)
+    img = f'<img src="{pic}" alt="{html.escape(g["title"])}" />\n' if pic else ""
+    body = (img + f'<p>{html.escape(desc)}</p>\n<p>{html.escape(body_intro)}</p>\n'
+            f'<h3>Tải về theo độ phân giải</h3>\n<p>Chọn dòng đúng độ phân giải màn hình máy bạn. Tệp tải từ trang nguồn (HTTP), Monika không lưu bản sao.</p>\n'
+            f'<table>\n<tr><th>Màn hình</th><th>Loại</th><th>Dung lượng</th><th>Máy mẫu</th><th>Tải</th></tr>\n{rows_html(g)}\n</table>\n'
+            f'<p>Nguồn thông tin: <a href="{g["page_url"]}">dedomil.net</a>' + (f' · Hãng: {html.escape(g["vendor"])}' if g.get("vendor") else "") + "</p>")
+    meta = {"type": "game", "size": str(jars_min) if jars_min else "", "cat": cat, "tags": "goc", "plat": "j2me",
+            "res": ", ".join(res), "desc": desc}
+    if pic:
+        meta["img"] = pic
+    meta.update({f"v{i}": line for i, line in enumerate(v_lines(g), 1)})
+    return {"title": g["title"], "html": body, "labels": ["Game", cat], "meta": meta,
+            "published": (start - timedelta(minutes=n)).strftime("%Y-%m-%dT%H:%M:%SZ"), "description": desc[:150]}
+
+
+def build(data, start, skip_ids=()):
+    """Bai cho moi game qua bo loc va co ban tai. Game co mo ta viet tay (vi/mo-ta-vi.json) dung ban viet tay,
+    con lai sinh tu du lieu co cau truc. Sap theo luot tai giam dan; skip_ids = game da dang roi."""
+    from .genre import guess_genre
+    from .vi_desc import describe
     vi = json.load(open(os.path.join(data, "vi", "mo-ta-vi.json"), encoding="utf-8"))
-    posts = []
-    paths = sorted(glob.glob(os.path.join(data, "dedomil", "games", "*.json")), key=lambda p: int(os.path.basename(p)[:-5]))
-    n = 0
-    for p in paths:
+    games = []
+    for p in glob.glob(os.path.join(data, "dedomil", "games", "*.json")):
         g = json.load(open(p, encoding="utf-8"))
-        v = vi.get(str(g["source_id"]))
-        if g["filter"]["status"] != "ok" or not v:
+        if g["filter"]["status"] != "ok" or g["source_id"] in skip_ids or not v_lines(g):
             continue
-        jars = [x["size_kb"] for x in g["variants"] if x["kind"] == "jar" and x["size_kb"]]
+        games.append(g)
+    games.sort(key=lambda g: (-(g.get("downloads") or 0), g["source_id"]))
+    posts = []
+    for n, g in enumerate(games):
         allres = {x["resolution"] for x in g["variants"] if x["resolution"]}
-        res = sorted(allres, key=lambda r: (RES_PRIORITY.index(r) if r in RES_PRIORITY else 99, r))[:6]
-        pic = f'{API_PIC}{g["source_id"]}_1.jpg'
-        body = (f'<img src="{pic}" alt="{html.escape(g["title"])}" />\n<p>{html.escape(v["desc"])}</p>\n<p>{html.escape(v["body"])}</p>\n'
-                f'<h3>Tải về theo độ phân giải</h3>\n<p>Chọn dòng đúng độ phân giải màn hình máy bạn. Tệp tải từ trang nguồn (HTTP), Monika không lưu bản sao.</p>\n'
-                f'<table>\n<tr><th>Màn hình</th><th>Loại</th><th>Dung lượng</th><th>Máy mẫu</th><th>Tải</th></tr>\n{rows_html(g)}\n</table>\n'
-                f'<p>Nguồn thông tin: <a href="{g["page_url"]}">dedomil.net</a>' + (f' · Hãng: {html.escape(g["vendor"])}' if g.get("vendor") else "") + "</p>")
-        posts.append({
-            "title": g["title"], "html": body, "labels": ["Game", v["cat"]],
-            "meta": {"type": "game", "size": str(min(jars)) if jars else "", "cat": v["cat"], "tags": "goc", "plat": "j2me",
-                     "res": ", ".join(res), "img": pic, "desc": v["desc"],
-                     **{f"v{i}": line for i, line in enumerate(v_lines(g), 1)}},
-            "published": (start - timedelta(minutes=n)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "description": v["desc"][:150],
-        })
-        n += 1
+        res = sorted(allres, key=lambda r: (RES_PRIORITY.index(r) if r in RES_PRIORITY else 99, r))
+        th = g.get("thumbs") or []
+        pic = f'{API_PIC}{g["source_id"]}_1.jpg' if th else ""
+        v = vi.get(str(g["source_id"]))
+        if v:
+            cat, desc, intro = v["cat"], v["desc"], v["body"]
+        else:
+            cat = guess_genre(g["title"], g.get("description_en_private") or "")
+            lo, hi = kb_range(g)
+            desc, intro = describe(g, cat, res, lo, hi)
+        posts.append(entry(g, cat, desc, intro, res[:6], n, start, pic))
     return posts
+
+
+def split(posts, per_file):
+    return [posts[i:i + per_file] for i in range(0, len(posts), per_file)]
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--data", required=True)
-    ap.add_argument("--out", required=True)
+    ap.add_argument("--out", required=True, help="thu muc dau ra: posts-001.json, posts-002.json, ...")
+    ap.add_argument("--per-file", type=int, default=300)
+    ap.add_argument("--skip", default="", help="id game da dang, cach nhau dau phay")
+    ap.add_argument("--skip-handwritten", action="store_true", help="bo qua game co mo ta viet tay (da dang o dot thi diem)")
     a = ap.parse_args()
-    posts = build(a.data, datetime.now(timezone.utc).replace(microsecond=0))
-    json.dump(posts, open(a.out, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
-    print(f"{len(posts)} bai -> {a.out}")
+    skip = {int(x) for x in a.skip.split(",") if x.strip()}
+    if a.skip_handwritten:
+        skip |= {int(k) for k in json.load(open(os.path.join(a.data, "vi", "mo-ta-vi.json"), encoding="utf-8"))}
+    posts = build(a.data, datetime.now(timezone.utc).replace(microsecond=0), skip)
+    os.makedirs(a.out, exist_ok=True)
+    parts = split(posts, a.per_file)
+    for i, part in enumerate(parts, 1):
+        json.dump(part, open(os.path.join(a.out, f"posts-{i:03d}.json"), "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+    print(f"{len(posts)} bai -> {len(parts)} file trong {a.out}")

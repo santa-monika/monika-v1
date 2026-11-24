@@ -14,7 +14,7 @@ def thumb(raw):
     return out.getvalue(), im.size
 
 
-def run(data_dir, fetcher, max_per_game=2):
+def run(data_dir, fetcher, max_per_game=1, id_from=0, id_to=0):
     gdir = os.path.join(data_dir, "dedomil", "games")
     idir = os.path.join(data_dir, "dedomil", "img")
     os.makedirs(idir, exist_ok=True)
@@ -23,6 +23,10 @@ def run(data_dir, fetcher, max_per_game=2):
         g = json.load(open(path, encoding="utf-8"))
         if g["filter"]["status"] != "ok" or g.get("thumbs") is not None:
             continue
+        if (id_from and g["source_id"] < id_from) or (id_to and g["source_id"] > id_to):
+            continue
+        if not any(v.get("resolution") for v in g["variants"]):
+            continue  # khong co ban tai: khong dang bai nen khong can anh
         thumbs = []
         for i, url in enumerate(g["screenshots"][:max_per_game], 1):
             try:
@@ -44,6 +48,9 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--delay", type=float, default=2.0)
+    ap.add_argument("--max-per-game", type=int, default=1)
+    ap.add_argument("--id-from", type=int, default=0)
+    ap.add_argument("--id-to", type=int, default=0)
     a = ap.parse_args()
-    n, bad = run(a.out, Fetcher(delay=a.delay))
+    n, bad = run(a.out, Fetcher(delay=a.delay), a.max_per_game, a.id_from, a.id_to)
     print(f"anh: {n} moi, {bad} loi")
