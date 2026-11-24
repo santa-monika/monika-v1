@@ -1,0 +1,68 @@
+name: crawl-waptai
+# Lay metadata java.waptai.com qua WordPress REST API (~10 yeu cau), ghi vao repo du lieu rieng.
+# Tuy chon: tai + go muc nhung (MIDlet WapTai.COM) cho cac bai chi dinh, dua JAR sach len artifact (khong dang len dau ca). Chay tay.
+on:
+  workflow_dispatch:
+    inputs:
+      jar_ids:
+        description: "Id bai can tai + lam sach JAR, cach nhau dau phay (de trong = chi lay metadata)"
+        required: false
+        default: ""
+      jar_res:
+        description: "Chi lay cac do phan giai nay, vi du 240x320,320x240 (de trong = tat ca)"
+        required: false
+        default: ""
+      delay:
+        description: "Giay giua hai yeu cau"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: crawl-waptai
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: santa-monika/monika-sideproject
+          token: ${{ secrets.DATA_REPO_TOKEN }}
+          path: data-repo
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m unittest discover -s tests
+      - name: Crawl metadata
+        env:
+          DELAY: ${{ inputs.delay }}
+        run: python -m crawler.waptai --out data-repo/data --delay "$DELAY"
+      - name: Tai va lam sach JAR
+        if: ${{ inputs.jar_ids != '' }}
+        env:
+          IDS: ${{ inputs.jar_ids }}
+          RES: ${{ inputs.jar_res }}
+          DELAY: ${{ inputs.delay }}
+        run: python -m crawler.waptai_jars --data data-repo/data --jar-out jar-sach --ids "$IDS" --res "$RES" --delay "$DELAY"
+      - name: Ghi vao repo du lieu rieng
+        working-directory: data-repo
+        run: |
+          git config user.name "monika-crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then echo "khong co thay doi"; exit 0; fi
+          git commit -m "data: waptai crawl $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push
+      - name: JAR sach (artifact)
+        if: ${{ inputs.jar_ids != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: waptai-jar-sach
+          path: jar-sach
+          retention-days: 7
