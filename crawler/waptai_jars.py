@@ -1,7 +1,7 @@
 """Tai JAR cua waptai (host up.waptai.com), go muc nhung (crawler.jarclean), luu ban sach + ghi ket qua vao JSON bai.
 Chi lay bai qua bo loc (status ok). Chay lai duoc: file da co (dung sha256 ban sach) thi bo qua.
 Khong dang len dau ca; dau ra la thu muc JAR sach de sep duyet truoc khi dua len kho."""
-import argparse, hashlib, json, os, re, sys
+import argparse, hashlib, json, os, re, sys, time
 from .common import Fetcher, RateLimited
 from . import jarclean
 
@@ -9,6 +9,25 @@ from . import jarclean
 def safe_name(url):
     n = url.rsplit("/", 1)[-1]
     return re.sub(r"[^A-Za-z0-9._-]", "_", n)
+
+
+WAITS = []
+SHORT_LIMIT = 300  # 429 voi Retry-After <= 300 giay la gioi han toc do ngan: cho dung thoi gian site yeu cau, giam toc do roi lam tiep
+
+
+def get_polite(fetcher, url, waits):
+    """Tai url; gap 429 ngan thi cho Retry-After (+5s), tang delay roi thu lai; 429 dai (gioi han ngay) thi nem RateLimited."""
+    for _ in range(6):
+        try:
+            return fetcher.get(url, binary=True)
+        except RateLimited as e:
+            if not e.retry_after or e.retry_after > SHORT_LIMIT:
+                raise
+            waits.append(e.retry_after)
+            print(f"429 ngan, cho {e.retry_after}s roi tiep (delay {fetcher.delay}s)", file=sys.stderr, flush=True)
+            time.sleep(e.retry_after + 5)
+            fetcher.delay = min(fetcher.delay * 1.5, 20)
+    raise RateLimited(url, None)
 
 
 def process_post(r, jar_out, fetcher, only_res=None, max_files=None):
@@ -30,7 +49,7 @@ def process_post(r, jar_out, fetcher, only_res=None, max_files=None):
         if d["url"] in local and os.path.exists(path):
             continue
         try:
-            raw = fetcher.get(d["url"], binary=True)
+            raw = get_polite(fetcher, d["url"], WAITS)
             clean, log, warn = jarclean.clean_jar(raw)
             inside = jarclean.waptai_strings_inside(clean)
         except RateLimited:

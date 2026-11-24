@@ -96,7 +96,7 @@ def build_files(r, d, items, imgs_raw, idx, labels, extra_meta, cat, plat="j2me"
     body += "".join(f"<p>{html.escape(par)}</p>\n" for par in d["body"].split("\n\n") if par.strip())
     body += f"<h3>Tải về theo độ phân giải</h3>\n<p>Chọn dòng đúng độ phân giải màn hình máy bạn.</p>\n{table_html(items)}\n"
     body += f'<p>Nguồn thông tin và ảnh chụp: <a href="{html.escape(r["page_url"])}">java.waptai.com</a></p>'
-    return {"title": d["title"], "html": body, "labels": labels, "meta": meta, "description": d["desc"][:150]}
+    return {"title": d["title"], "html": body, "labels": labels, "meta": meta, "description": d["desc"][:150], "source": r["source_id"]}
 
 
 def build(data, desc, start, only_ids=None, idx=None, app_desc=None, truyen_desc=None, guide_desc=None):
@@ -144,7 +144,7 @@ def build(data, desc, start, only_ids=None, idx=None, app_desc=None, truyen_desc
             f'<p><img src="{html.escape(u)}" alt="{html.escape(d["title"])} - trang {i}/{len(pages)}" /></p>\n' for i, u in enumerate(pages, 1))
         body += f'<p>Nguồn: <a href="{html.escape(r["page_url"])}">java.waptai.com</a></p>'
         posts.append({"title": d["title"], "html": body, "labels": ["Bài viết", cat],
-                      "meta": {"type": "post", "cat": cat, "img": pages[0], "desc": d["desc"]}, "description": d["desc"][:150]})
+                      "meta": {"type": "post", "cat": cat, "img": pages[0], "desc": d["desc"]}, "description": d["desc"][:150], "source": r["source_id"]})
     for r in list(load_posts(data, "meo", only_ids)) + list(load_posts(data, "tin", only_ids)):
         d = (guide_desc or {}).get(str(r["source_id"]))
         if not d or d.get("flag") or not (d.get("body_html") or "").strip():
@@ -152,7 +152,7 @@ def build(data, desc, start, only_ids=None, idx=None, app_desc=None, truyen_desc
             continue
         cat = "Thủ thuật & mẹo"
         posts.append({"title": d["title"], "html": d["body_html"], "labels": ["Bài viết", cat],
-                      "meta": {"type": "post", "cat": cat, "desc": d["desc"]}, "description": d["desc"][:150]})
+                      "meta": {"type": "post", "cat": cat, "desc": d["desc"]}, "description": d["desc"][:150], "source": r["source_id"]})
     for n, p in enumerate(posts):
         p["published"] = stamp(start, n)
     return posts, skipped
@@ -177,11 +177,18 @@ def main(argv=None):
     ap.add_argument("--out", required=True, help="file posts.json (mot file) hoac thu muc khi dung --per-file")
     ap.add_argument("--per-file", type=int, default=0, help="chia ra nhieu file posts-001.json ... moi file toi da n bai")
     ap.add_argument("--ids", default="")
+    ap.add_argument("--exported", default="", help="file JSON danh sach id bai da xuat (bo qua, va them id moi sau khi xuat)")
     a = ap.parse_args(argv)
     only = {int(x) for x in a.ids.split(",") if x.strip()} or None
     idx = images.load(os.path.join(a.data, "waptai", "images.json"))
     posts, skipped = build(a.data, load_desc(a.desc), datetime.now(timezone.utc).replace(microsecond=0), only, idx,
                            load_desc(a.app_desc), load_desc(a.truyen_desc), load_desc(a.guide_desc))
+    done = set(json.load(open(a.exported))) if a.exported and os.path.exists(a.exported) else set()
+    if done:
+        posts = [p for p in posts if p["source"] not in done]
+        print(f"bo {len(done)} bai da xuat truoc do")
+    if a.exported:
+        json.dump(sorted(done | {p["source"] for p in posts}), open(a.exported, "w"))
     if a.per_file:
         os.makedirs(a.out, exist_ok=True)
         files = []
