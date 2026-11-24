@@ -11,3 +11,15 @@ Công cụ lập chỉ mục metadata game Java/Symbian cho dự án Monika. Rep
 Cần Secrets: `DATA_REPO_TOKEN` (fine-grained token, chỉ quyền ghi nội dung repo dữ liệu), `PD_KEY` (chỉ cho workflow lập chỉ mục Pixeldrain).
 
 Chạy thử cục bộ: `python -m unittest discover -s tests`.
+
+## bisduckopath.blogspot.com (nguồn còn cập nhật)
+
+`crawler/bisducko.py` + `crawler/mediafire.py` + workflow `crawl-bisducko` (chạy hằng ngày 03:17 giờ Việt Nam, hoặc chạy tay):
+
+- `sync`: feed Blogger JSON (`--since` chỉ lấy bài mới sửa; chủ nhật quét đầy đủ để phát hiện bài bị gỡ) → `data/bisducko/posts/<id>.json`, giữ HTML gốc, phân loại (game, app, giao diện, bài viết; bỏ game online, mod/hack game online, 18+, cờ bạc, không phải Java).
+- `resolve`: mở link MediaFire qua API công khai (có sha256, revision). Tệp đổi nội dung hoặc tệp mới của bài cũ được ghi vào `history` của bài ("bản vá").
+- `fetch`: tải tệp mới/đã đổi, tách gói zip nhiều JAR, gỡ quảng cáo nhúng, dedupe sha256, up Pixeldrain (`bdk-<n>-...`).
+- `build`: `posts.json` cho `tools/blogger-import.mjs`, `bdk-aliases.json` (khóa tải ổn định → tệp hiện hành, đẩy lên nhánh công khai `bdk-data`), `skipped.json`. `report`: bài mới, bản vá, lỗi, game thiếu JAR/ảnh.
+- Game **Port** (chạy trên giả lập): meta `port: 1`, nhãn `PORT`, tiêu đề giữ `[Port]`; Worker ẩn khỏi app, chỉ hiện trên web.
+
+Cần Secrets: `DATA_REPO_TOKEN`, `PD_KEY` (đã có). Chạy thử cục bộ: `python -m unittest discover -s tests`.
