@@ -52,3 +52,12 @@ class TPromo(unittest.TestCase):
         self.assertEqual(z.read("G.class"), b"x")
         same, log2 = jarpromo.clean_jar(make_jar("MIDlet-1: Game, , G\r\n"))
         self.assertEqual(log2, [])
+
+
+def test_transient_errors_are_retried():
+    from crawler.fetch_jars import TRANSIENT
+    for e in ("URLError: <urlopen error [Errno 111] Connection refused>", "URLError: <urlopen error timed out>",
+              "URLError: <urlopen error _ssl.c:994: The handshake operation timed out>", "HTTP 503"):
+        assert TRANSIENT.search(e), e
+    for e in ("HTTP 404", "khong phai zip: BadZipFile", "khong co MIDlet-1"):
+        assert not TRANSIENT.search(e), e
