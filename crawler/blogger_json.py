@@ -1,6 +1,7 @@
 """Sinh posts.json (dau vao cho tools/blogger-import.mjs cua monika-java) tu du lieu game da loc.
 Bai link-only: khong co meta.jar; bang link tai theo do phan giai nam trong than bai (tro ve trang nguon)."""
-import argparse, glob, html, json, os
+import argparse, glob, html, json, os, re
+from .normalize import strip_accents
 from datetime import datetime, timedelta, timezone
 
 # Worker (parseRes) chi giu toi da 6 do phan giai dau tien trong meta.res: dua cac cau pho bien len truoc.
@@ -65,7 +66,8 @@ def entry(g, cat, desc, body_intro, res, n, start, pic):
     if pic:
         meta["img"] = pic
     meta.update({f"v{i}": line for i, line in enumerate(v_lines(g), 1)})
-    return {"title": g["title"], "html": body, "labels": ["Game", cat], "meta": meta,
+    base = re.sub(r"[^a-z0-9]+", "-", strip_accents(g["title"]).lower()).strip("-")[:28].strip("-") or "game"
+    return {"title": g["title"], "slug": f'{base}-{g["source_id"]}', "html": body, "labels": ["Game", cat], "meta": meta,
             "published": (start - timedelta(minutes=n)).strftime("%Y-%m-%dT%H:%M:%SZ"), "description": desc[:150]}
 
 
