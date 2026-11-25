@@ -83,7 +83,8 @@ def prepare_media(raw, ext):
         return raw, {"ok": False, "error": "trang HTML hoac qua nho"}, ext
     if ext in ("sis", "sisx"):
         # SIS cu: UID1 0x10003A12 (12 3A 00 10); SIS Symbian 9: 0x10201A7A (7A 1A 20 10); mot so tep bi nen zip
-        if raw[:4] not in (b"\x12\x3a\x00\x10", b"\x7a\x1a\x20\x10") and raw[:2] != b"PK":
+        # SIS cu (Symbian 6-8): 4 byte dau la tong kiem tra, roi UID1 0x10003A12 (12 3A 00 10) va UID2 0x10000419; SIS Symbian 9: UID1 0x10201A7A o dau tep
+        if raw[:4] != b"\x7a\x1a\x20\x10" and raw[4:8] != b"\x12\x3a\x00\x10" and raw[:4] != b"\x12\x3a\x00\x10" and raw[:2] != b"PK":
             return raw, {"ok": False, "error": "khong phai tep SIS"}, ext
         return raw, {"ok": True, "media": "sis"}, ext
     if ext == "nth":
