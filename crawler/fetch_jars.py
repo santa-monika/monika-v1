@@ -72,6 +72,47 @@ def inspect(raw):
     return {"ok": True, "midlets": len(midlets), "promo": promo, "icon": icon, "name": parts[0]}
 
 
+MEDIA_EXTS = ("sis", "sisx", "nth", "mp3", "jpg", "jpeg", "png", "gif")
+IMG_EXTS = ("jpg", "jpeg", "png", "gif")
+
+
+def prepare_media(raw, ext):
+    """Kiem tra va (voi anh) thu nho tep S60/theme/nhac/anh. -> (raw_moi, info, ext_moi). info.ok False neu hong hoac la trang HTML."""
+    head = raw[:600].lstrip().lower()
+    if head.startswith((b"<!doctype", b"<html", b"<?xml", b"<head", b"<body")) or len(raw) < 200:
+        return raw, {"ok": False, "error": "trang HTML hoac qua nho"}, ext
+    if ext in ("sis", "sisx"):
+        # SIS cu: UID1 0x10003A12 (12 3A 00 10); SIS Symbian 9: 0x10201A7A (7A 1A 20 10); mot so tep bi nen zip
+        if raw[:4] not in (b"\x12\x3a\x00\x10", b"\x7a\x1a\x20\x10") and raw[:2] != b"PK":
+            return raw, {"ok": False, "error": "khong phai tep SIS"}, ext
+        return raw, {"ok": True, "media": "sis"}, ext
+    if ext == "nth":
+        return raw, {"ok": True, "media": "nth"}, ext
+    if ext == "mp3":
+        h = raw[:4096]
+        if not (h.startswith(b"ID3") or any(h[i] == 0xFF and (h[i + 1] & 0xE0) == 0xE0 for i in range(len(h) - 1))):
+            return raw, {"ok": False, "error": "khong phai MP3"}, ext
+        return raw, {"ok": True, "media": "mp3"}, ext
+    from PIL import Image
+    try:
+        im = Image.open(io.BytesIO(raw))
+        im.load()
+    except Exception as e:
+        return raw, {"ok": False, "error": f"anh loi: {type(e).__name__}"}, ext
+    w, h = im.size
+    if min(w, h) < 90 or max(w, h) > 12000:
+        return raw, {"ok": False, "error": f"anh kich thuoc la {w}x{h}"}, ext
+    info = {"ok": True, "media": "img", "w": w, "h": h}
+    if ext == "gif" and getattr(im, "is_animated", False) and len(raw) <= 700_000:
+        return raw, info, "gif"
+    im = im.convert("RGB")
+    im.thumbnail((640, 640))
+    buf = io.BytesIO()
+    im.save(buf, "JPEG", quality=82, optimize=True)
+    info.update(w2=im.size[0], h2=im.size[1])
+    return buf.getvalue(), info, "jpg"
+
+
 def pd_name(src, gid, file):
     return f"{src}-{gid}-" + re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(file))
 
@@ -100,7 +141,7 @@ def main(argv=None):
     if a.index and os.path.exists(a.index):
         # chi dung lai tep cu neu ten khop quy tac cua Worker /v1/p (ten khac se khong phat duoc), con lai up lai voi ten dung
         known = {f["sha256"]: f["id"] for f in json.load(open(a.index, encoding="utf-8"))
-                 if f.get("sha256") and re.match(r"^(waptai|qnw|gt321|wvip)-\d+-.+\.jar$", f.get("name", ""), re.I)}
+                 if f.get("sha256") and re.match(r"^((waptai|qnw|gt321|wvip)-\d+-.+\.(jar|sis|sisx|nth|mp3)|waptai-img-[0-9a-f]{12}\.(jpg|gif))$", f.get("name", ""), re.I)}
     for sf in ([a.state] if os.path.exists(a.state) else []) + [f for f in seen_files if f != a.state]:
         for l in open(sf, encoding="utf-8"):
             r = json.loads(l)
@@ -115,7 +156,8 @@ def main(argv=None):
     skipped = set()  # loi tam thoi trong lan chay nay: de lan sau
     out = open(a.state, "a", encoding="utf-8")
     for it in inv:
-        if it["url"] in done or it["url"] in skipped or gids[it["group"]] % a.nshards != a.shard:
+        shard_key = int(hashlib.sha1(it["url"].encode()).hexdigest()[:8], 16) if it.get("ext") in MEDIA_EXTS else gids[it["group"]]
+        if it["url"] in done or it["url"] in skipped or shard_key % a.nshards != a.shard:
             continue
         if (a.limit and n >= a.limit) or (a.budget_s and time.time() - t0 > a.budget_s):
             break
@@ -133,13 +175,19 @@ def main(argv=None):
                         raise
                     print(f"loi tam thoi ({type(e).__name__}), nghi {wait} giay roi thu lai", flush=True)
                     time.sleep(wait)
-            try:
-                raw, log = jarpromo.clean_jar(raw)
-            except Exception:
+            mext = it.get("ext") if it.get("ext") in MEDIA_EXTS else None
+            if mext:
+                raw, info, mext = prepare_media(raw, mext)
                 log = []
+            else:
+                try:
+                    raw, log = jarpromo.clean_jar(raw)
+                except Exception:
+                    log = []
+                info = None
             if log:
                 rec["cleaned"] = log
-            info = inspect(raw)
+            info = info or inspect(raw)
             rec.update(info)
             if info["ok"]:
                 rec["sha256"] = hashlib.sha256(raw).hexdigest()
@@ -147,8 +195,11 @@ def main(argv=None):
                 if rec["sha256"] in known:
                     rec.update(pixeldrain_id=known[rec["sha256"]], dup=True)
                 elif not a.no_upload:
-                    name = pd_name(it["src"], rec["gid"], it["file"])
-                    path = f"/tmp/fj-{os.getpid()}.jar"
+                    if mext in IMG_EXTS:
+                        name = f"waptai-img-{rec['sha256'][:12]}.{mext}"
+                    else:
+                        name = pd_name(it["src"], rec["gid"], it["file"])
+                    path = f"/tmp/fj-{os.getpid()}.bin"
                     open(path, "wb").write(raw)
                     rec["pixeldrain_id"] = pd_upload.upload_one(path, name)
                     rec["pd_name"] = name

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       src:
-        description: "gt321 hoac wvip"
+        description: "gt321, wvip hoac media (S60 sis/sisx, theme nth, hinh nen, nhac chuong: data/inventory/media.jsonl)"
         required: true
         default: "gt321"
       nshards:
@@ -64,6 +64,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+      - name: Cai Pillow (thu nho anh hinh nen)
+        run: pip install pillow
       - name: Kiem tra PD_KEY
         env:
           PD_KEY: ${{ secrets.PD_KEY }}
